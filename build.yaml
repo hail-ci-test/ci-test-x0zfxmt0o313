@@ -1,6 +1,6 @@
 steps:
   - kind: createNamespace
-    name: default_ns
+    name: default_ns 
     namespaceName: default
     public: true
   - kind: buildImage2
