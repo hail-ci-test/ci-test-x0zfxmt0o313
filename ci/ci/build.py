@@ -17,7 +17,7 @@ from .environment import (
     DOMAIN,
     IP,
     CI_UTILS_IMAGE,
-    KANIKO_IMAGE,
+    BUILDKIT_IMAGE,
     DEFAULT_NAMESPACE,
     KUBERNETES_SERVER_URL,
     BUCKET,
@@ -253,7 +253,10 @@ class BuildImage2Step(Step):
         else:
             self.base_image = f'{DOCKER_PREFIX}/ci-intermediate'
         self.image = f'{self.base_image}:{self.token}'
-        self.digest_remote_location: Optional[str] = None
+        if publish_as:
+            self.cache_repository = f'{DOCKER_PREFIX}/{self.publish_as}:cache'
+        else:
+            self.cache_repository = f'{DOCKER_PREFIX}/ci-intermediate:cache'
         self.job = None
 
     def wrapped_job(self):
@@ -277,27 +280,12 @@ class BuildImage2Step(Step):
         return {'token': self.token, 'image': self.image}
 
     def build(self, batch, code, scope):
-        self.digest_remote_location = f'gs://{BUCKET}/build/{batch.attributes["token"]}-image-digests/{self.name}'
-
-        input_files = []
-        file_overrides: Dict[str, Dict[str, str]] = defaultdict(dict)
-        move_file_overrides_into_chroot = ''
-        if self.deps:
-            for d in self.deps:
-                if isinstance(d, BuildImage2Step):
-                    assert d.digest_remote_location is not None
-
-                    digest_local_location = '/io/' + d.name
-                    digest_local_chroot_location = '/python3.7-slim-stretch' + digest_local_location
-                    file_overrides[d.name]['image'] = digest_local_location
-                    input_files.append((d.digest_remote_location, digest_local_location))
-                    move_file_overrides_into_chroot += f'''
-mkdir -p $(dirname {digest_local_chroot_location})
-mv {digest_local_location} {digest_local_chroot_location}'''
-
         if self.inputs:
+            input_files = []
             for i in self.inputs:
                 input_files.append((f'gs://{BUCKET}/build/{batch.attributes["token"]}{i["from"]}', i["to"]))
+        else:
+            input_files = None
 
         config = self.input_config(code, scope)
 
@@ -307,44 +295,45 @@ mv {digest_local_location} {digest_local_chroot_location}'''
 
         if isinstance(self.dockerfile, dict):
             assert ['inline'] == list(self.dockerfile.keys())
-            unrendered_dockerfile = f'/io/Dockerfile.in.{self.token}'
+            unrendered_dockerfile = f'/home/user/Dockerfile.in.{self.token}'
             create_inline_dockerfile_if_present = f'echo {shq(self.dockerfile["inline"])} > {unrendered_dockerfile};\n'
         else:
             assert isinstance(self.dockerfile, str)
             unrendered_dockerfile = self.dockerfile
             create_inline_dockerfile_if_present = ''
-        dockerfile_in_context = os.path.join(context, 'Dockerfile.' + self.token)
 
-        cache_repo = DOCKER_PREFIX + '/cache'
         script = f'''
 set -ex
 
 {create_inline_dockerfile_if_present}
 
-cp {unrendered_dockerfile} /python3.7-slim-stretch/Dockerfile.in
-
-{ move_file_overrides_into_chroot }
-
-time chroot /python3.7-slim-stretch /usr/local/bin/python3 \
-     jinja2_render.py \
+time python3 \
+     ~/jinja2_render.py \
      {shq(json.dumps(config))} \
-     /Dockerfile.in \
-     /Dockerfile.out \
-     {shq(json.dumps(file_overrides))}
-
-mv /python3.7-slim-stretch/Dockerfile.out {shq(dockerfile_in_context)}
+     {unrendered_dockerfile} \
+     /home/user/Dockerfile
 
 set +e
-/busybox/sh /convert-google-application-credentials-to-kaniko-auth-config
+/bin/sh /convert-google-application-credentials-to-docker-auth-config
 set -e
 
-exec /kaniko/executor --dockerfile={shq(dockerfile_in_context)} --context=dir://{shq(context)} --destination={shq(self.image)} --cache=true --cache-repo={shq(cache_repo)} --snapshotMode=redo --use-new-run --image-name-with-digest-file=/io/digestfile --reproducible'''
+export BUILDKITD_FLAGS=--oci-worker-no-process-sandbox
+exec buildctl-daemonless.sh \
+     build \
+     --frontend dockerfile.v0 \
+     --local context={shq(context)} \
+     --local dockerfile=/home/user/Dockerfile \
+     --output type=image,name={shq(self.image)},push=true \
+     --output type=image,name={shq(self.cache_repository)},push=true \
+     --export-cache type=inline \
+     --import-cache type=registry,ref={shq(self.cache_repository)}
+'''
 
         log.info(f'step {self.name}, script:\n{script}')
 
         self.job = batch.create_job(
-            KANIKO_IMAGE,
-            command=['/busybox/sh', '-c', script],
+            BUILDKIT_IMAGE,
+            command=['/bin/sh', '-c', script],
             secrets=[
                 {
                     'namespace': DEFAULT_NAMESPACE,
@@ -358,8 +347,8 @@ exec /kaniko/executor --dockerfile={shq(dockerfile_in_context)} --context=dir://
             attributes={'name': self.name},
             resources=self.resources,
             input_files=input_files,
-            output_files=[('/io/digestfile', self.digest_remote_location)],
             parents=self.deps_parents(),
+            unconfined=True
         )
 
     def cleanup(self, batch, scope, parents):

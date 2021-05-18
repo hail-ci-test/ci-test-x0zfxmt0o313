@@ -166,8 +166,8 @@ class Batch:
     def get_job_log(self, job_id: int) -> Optional[Dict[str, Any]]:
         return async_to_blocking(self._async_batch.get_job_log(job_id))
 
-    def wait(self):
-        return async_to_blocking(self._async_batch.wait())
+    def wait(self, *args, **kwargs):
+        return async_to_blocking(self._async_batch.wait(*args, **kwargs))
 
     def delete(self):
         async_to_blocking(self._async_batch.delete())
@@ -202,7 +202,8 @@ class BatchBuilder:
                    service_account=None, attributes=None, parents=None,
                    input_files=None, output_files=None, always_run=False,
                    timeout=None, gcsfuse=None, requester_pays_project=None,
-                   mount_tokens=False, network: Optional[str] = None) -> Job:
+                   mount_tokens=False, network: Optional[str] = None,
+                   unconfined: bool = False) -> Job:
         if parents:
             parents = [parent._async_job for parent in parents]
 
@@ -214,7 +215,15 @@ class BatchBuilder:
             input_files=input_files, output_files=output_files, always_run=always_run,
             timeout=timeout, gcsfuse=gcsfuse,
             requester_pays_project=requester_pays_project, mount_tokens=mount_tokens,
-            network=network)
+            network=network, unconfined=unconfined)
+
+        return Job.from_async_job(async_job)
+
+    def create_jvm_job(self, command, parents=None, **kwargs) -> Job:
+        if parents:
+            parents = [parent._async_job for parent in parents]
+
+        async_job = self._async_builder.create_jvm_job(command, **kwargs)
 
         return Job.from_async_job(async_job)
 
