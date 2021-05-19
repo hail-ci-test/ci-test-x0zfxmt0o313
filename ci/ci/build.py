@@ -313,24 +313,26 @@ time python3 \
      {unrendered_dockerfile} \
      /home/user/Dockerfile
 
-set +e
-/bin/sh /convert-google-application-credentials-to-docker-auth-config
-set -e
+set +x
+/bin/sh /home/user/convert-google-application-credentials-to-docker-auth-config
+set -x
 
 export BUILDKITD_FLAGS=--oci-worker-no-process-sandbox
-exec buildctl-daemonless.sh \
+buildctl-daemonless.sh \
      build \
      --frontend dockerfile.v0 \
      --local context={shq(context)} \
-     --local dockerfile=/home/user/Dockerfile \
-     --output type=image,name={shq(self.image)},push=true \
-     --output type=image,name={shq(self.cache_repository)},push=true \
+     --local dockerfile=/home/user \
+     --output 'type=image,"name={shq(self.image)},{shq(self.cache_repository)}",push=true' \
      --export-cache type=inline \
-     --import-cache type=registry,ref={shq(self.cache_repository)}
+     --import-cache type=registry,ref={shq(self.cache_repository)} \
+     --trace=/home/user/trace
+cat /tmp/trace
 '''
 
         log.info(f'step {self.name}, script:\n{script}')
 
+        docker_registry = DOCKER_PREFIX.split('/')[0]
         self.job = batch.create_job(
             BUILDKIT_IMAGE,
             command=['/bin/sh', '-c', script],
@@ -342,7 +344,8 @@ exec buildctl-daemonless.sh \
                 }
             ],
             env={
-                'GOOGLE_APPLICATION_CREDENTIALS': '/secrets/gcr-push-service-account-key/gcr-push-service-account-key.json'
+                'GOOGLE_APPLICATION_CREDENTIALS': '/secrets/gcr-push-service-account-key/gcr-push-service-account-key.json',
+                'REGISTRY': docker_registry
             },
             attributes={'name': self.name},
             resources=self.resources,

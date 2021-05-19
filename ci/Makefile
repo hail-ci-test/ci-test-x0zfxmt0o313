@@ -23,9 +23,12 @@ check:
 blacken:
 	$(BLACK)
 
-.PHONY: build-ci-utils
-build-ci-utils:
+.PHONY: service-base
+service-base:
 	$(MAKE) -C ../docker service-base
+
+.PHONY: build-ci-utils
+build-ci-utils: service-base
 	rm -rf Dockerfile.ci-utils.out && mkdir -p Dockerfile.ci-utils.out
 	python3 jinja2_render.py '{"service_base_image":{"image":"'$$(cat ../docker/service-base)'"}}' Dockerfile.ci-utils Dockerfile.ci-utils.out/Dockerfile
 	../docker-build.sh . Dockerfile.ci-utils.out $(CI_UTILS_IMAGE)
@@ -35,8 +38,7 @@ build-hail-buildkit:
 	../docker-build.sh . buildkit $(HAIL_BUILDKIT_IMAGE)
 
 .PHONY: build
-build:
-	$(MAKE) -C ../docker service-base
+build: service-base
 	rm -rf Dockerfile.out && mkdir -p Dockerfile.out
 	python3 jinja2_render.py '{"service_base_image":{"image":"'$$(cat ../docker/service-base)'"}}' Dockerfile Dockerfile.out/Dockerfile
 	../docker-build.sh .. ci/Dockerfile.out $(CI_IMAGE)
