@@ -111,7 +111,7 @@ steps:
       - from: /repo/ci/test/resources
         to: /io/ci/test/resources
     dependsOn:
-      - service_base_image
+      - hail_ubuntu_image
       - merge_code
   - kind: runImage
     name: create_certs
